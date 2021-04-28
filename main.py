@@ -18,13 +18,14 @@
 import tkinter as tk
 from tkinter import filedialog, ttk
 from pathlib import Path
-import subprocess, json, threading, time, datetime
+from distutils.dir_util import copy_tree
+import subprocess, json, threading, time, datetime, zipfile, os
 import concurrent.futures
 from pyorthanc import Orthanc
 
 orthanc = Orthanc('http://localhost:8042')
 
-name ="APP"
+name ="genii"
 # helper class for common gui widgets
 class Elements:
     def __init__(self, master):
@@ -78,11 +79,11 @@ class MainArea(tk.Frame):
         self.f2.rowconfigure(0, weight=1)
 
         # Individual elements
-
+        self.database = Path('/home/linuxbox1/Database/')
         # Display results and status
-        headers = ["ID","Name","DLS","Missing","DLC"]
-        headings = ["#", "Subject ID", "Download Status","Missing" ,"Conversion"]
-        self.result_tree = result_window(self.f2, headers,headings)
+        headers = ["ID","Name","Date","DLS","Missing","Status"]
+        headings = ["#", "Subject ID","Date", "Download Status","Missing" ,"Conversion Status"]
+        self.result_tree = result_window(self.f2, self.database, headers,headings)
         # Controls
         el = Elements(self.f1)
         el.button("Database", self.selectPath, '', 0, 0, tk.W + tk.E, 1)  # Selection of root directory
@@ -97,7 +98,7 @@ class MainArea(tk.Frame):
         self.db = []
 
     def selectPath(self):
-
+        self.db = []
         patients_identifiers = orthanc.get_patients()
 
         for patient_identifier in patients_identifiers:
@@ -105,21 +106,30 @@ class MainArea(tk.Frame):
             patient_name = patient['MainDicomTags']['PatientID']
             study_identifiers = patient['Studies']
             study = orthanc.get_study_information(study_identifiers[0])
-            study_date = study['MainDicomTags']['StudyDate']
+            date = study['MainDicomTags']['StudyDate']
+            date_obj = datetime.datetime.strptime(date, '%Y%m%d')
+            study_date = date_obj.date()
             stats = []
+            series_description =[]
+            missing_series=[]
             for s in study['Series']:
                 series = orthanc.get_series_information(s)
+                series_description.append(series['MainDicomTags']['SeriesDescription'])
                 stats.append(series['Status'])
 
             status_number = 0
+            for i in range(0,len(stats)):
+                if stats[i] == 'Missing':
+                    missing_series.append(series_description[i])
+
             if 'Missing' in stats:
-                status = 'Incomplete'
+                status = 'Missing'
                 status_number = stats.count('Missing')
             else:
-                status = 'Downloaded'
-            self.db.append([patient_name, study_date, status,status_number])
+                status = 'Complete'
+            self.db.append([patient_name, study_date, status,status_number,missing_series,patient['ID']])
         self.result_tree.fileList = self.db
-        print(self.db[0])
+        print(self.db[2])
         # Refresh results display
         self.result_tree.display()  # display the results
 
@@ -131,63 +141,97 @@ class MainArea(tk.Frame):
     # Routed here from processThreader when Process button is pressed
     def process(self):
         # self.stat.set('Processing...')
-        queue = self.result_tree.queue()
+        # queue = self.result_tree.queue()
+        # for i in range(0,len(self.db)):
+        #     fName = str(Path(self.database/(self.db[i][0] + '.zip')))
+        #     print(fName)
+        #     self.result_tree.processing_status(i,'Processing . . .')
+        #     bytes_content = orthanc.archive_patient(self.db[i][-1])
+        #     with open(fName, 'wb') as file_handler:
+        #         file_handler.write(bytes_content)
+        #     self.result_tree.processing_status(i, 'Processed')
         t1=time.perf_counter()
-        process_queue = executor(queue, self.config.icaPath, self.overwrite.get(), self.result_tree.processing_status, self.config.user_options, self.result_tree.fileList)
+        process_queue = executor(self.db, self.database, self.result_tree)
         process_queue.threader()        # put the queue on multi-threaded processing
         t2 = time.perf_counter()
-        self.stat.set(f'Processing Completed in {round((t2-t1)/60)} minutes')
+
+        print(f'Processing Completed in {round((t2-t1)/60)} minutes')
+        # self.stat.set(f'Processing Completed in {round((t2-t1)/60)} minutes')
 
 class executor:
-    def __init__(self, list, icaPath, overwrite, status, user_options, result_tree):
+    def __init__(self,db,database_location,result_tree):
         self.fl = list
-        self.icaPath = icaPath
-        self.ov = overwrite
-        self.status = status
+        self.database_location = database_location
+        self.db = db
         self.result_tree = result_tree
         # self.aux_args=[]
-        self.aux_args=['-dim',user_options[1],'-den',user_options[2]]
-        if user_options[0]!='': self.aux_args.extend(['-tr',user_options[0]])
-        if self.ov == 1: self.aux_args.append("-overwrite")
+        # self.aux_args=['-dim',user_options[1],'-den',user_options[2]]
+        # if user_options[0]!='': self.aux_args.extend(['-tr',user_options[0]])
+        # if self.ov == 1: self.aux_args.append("-overwrite")
 
-    def call_ICA(self, que):
-        args = que[0]
-        id = que[1]
+    def execute_code(self, que):
+        # args = que[0]
+        id = que[0]
+        name = que[1]
+        fName_zip = str(Path(self.database_location / 'Zipped' / (name + '.zip')))
+        database_location = Path(que[2]/'Unzipped')
+        nifti_path = Path(que[2]/'NIFTI'/name)
+        os.mkdir(nifti_path)
+        archive = que[3]
         # print(args)
-        self.status(id, 'Processing...')
+        self.result_tree.processing_status(id, 'Downloading Zips')
+
+        # save zipped files
+        # bytes_content = orthanc.archive_patient(archive)
+        # with open(fName_zip, 'wb') as file_handler:
+        #     file_handler.write(bytes_content)
+        self.result_tree.processing_status(id, 'Extracting Zips')
+        #  Extract zip
+        # zip = zipfile.ZipFile(str(fName_zip))
+        # zip.extractall(database_location)
+
+        self.result_tree.processing_status(id, 'Extracting NIFTIs')
+        # Extract NIFTIS
+        fol = Path(database_location).glob(name+'*')
+        folder_name = [str(Path(i)) for i in fol]
+        args = ['dcm2niix','-o',nifti_path,folder_name[0]]
+        print(args)
         subprocess.run(args)
-        self.status(id, 'Processed')
-        self.result_tree[id][3] = 1
+        self.result_tree.processing_status(id, 'Processed')
+        # self.result_tree[id][3] = 1
 
     def threader(self):
         que=self.queue_prep()
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            executor.map(self.call_ICA, que)
+            executor.map(self.execute_code, que)
 
     def queue_prep(self):
         que=[]
-        for row in self.fl:
-            args = ["python2.7", str(self.icaPath), "-feat", str(row[0]), "-out", str(row[1])] + self.aux_args
-            que.append([args, row[-1]])
+        for i in range(0,len(self.db)):
+            name = self.db[i][0]
+            # fName_zip = str(Path(self.database_location /'Zipped'/ (self.db[i][0] + '.zip')))
+            # fName = str(Path(self.database_location / self.db[i][0]))
+            archive = self.db[i][-1]
+            row = [i, name, self.database_location, archive]
+            que.append(row)
         return que
-
-
 
 class result_window:
 
-    def __init__(self, parent,headers,headings):
+    def __init__(self, parent,database,headers,headings):
         # Draw a treeview of a fixed type
         # self.viewer=viewer
         # self.stat=stat
         self.parent = parent
+        self.database = database
         self.fileList = []
         self.tree = ttk.Treeview(self.parent, show='headings', columns=headers)
         self.tree.grid(sticky='NSEW')
-        widths = [30,200,150,50,100]
+        widths = [30,200,100,150,50,100]
         for i in range(0,len(headers)):
             self.tree.heading(headers[i], text=headings[i])
             self.tree.column(headers[i], width=widths[i], stretch=tk.NO, anchor='center')
-
+        self.tree.column(headers[1], width=widths[1], stretch=tk.NO, anchor='w')
         # self.tree.bind('<Button-1>',self.left_click)
         self.tree.bind('d', self.delete_entry)
         # self.tree.bind(('<Button-3>' ), self.double_left_click)
@@ -202,10 +246,17 @@ class result_window:
 
         for row in self.fileList:
             id = row[0]
-            status = row[1]
-            count= row[2]
-
-            self.tree.insert("", index, iid, values=(iid + 1, id,status, count))
+            date = row[1]
+            status = row[2]
+            count = row[3]
+            missing_series = row[4]
+            sel = self.tree.insert("", index, iid, values=(iid + 1, id, date,status, count))
+            if len(missing_series)!=0:
+                m_id = 1
+                for mis_ser in missing_series:
+                    # m_id = iid*10+m_id
+                    self.tree.insert(iid, "end", values=('', mis_ser, '', '', ''))
+                    # m_id += 1
 
 
             # self.motion_stats(iid, motion)
@@ -263,7 +314,7 @@ class result_window:
             im_list=[]
             for i in name:
                 im_list.append(path/i)
-            self.viewer.display(im_list,mode=1)
+            self.viewer.display(im_list, mode=1)
 
     # def double_left_click(self, event):
     #     iid = self.clickID
