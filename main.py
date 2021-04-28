@@ -19,7 +19,7 @@ import tkinter as tk
 from tkinter import filedialog, ttk
 from pathlib import Path
 from distutils.dir_util import copy_tree
-import subprocess, json, threading, time, datetime, zipfile, os
+import subprocess, json, threading, time, datetime, zipfile, os, shutil
 import concurrent.futures
 from pyorthanc import Orthanc
 
@@ -91,7 +91,7 @@ class MainArea(tk.Frame):
         # self.dataset = el.textField("Task/Dataset", 20, 1, 0)  # Task or Dataset to be searched for
         # self.filters = el.textField("Filters", 20, 1, 1)  # keywords to filter individual datasets
         # el.button("Search", self.search, '', 3, 0, tk.N + tk.S, 1)  # button press to start search
-        # el.button("Clear", self.result_tree.clear, '', 3, 1, tk.N, 1)  # button press to clear selection
+        el.button("Clear", self.result_tree.clear, '', 3, 1, tk.N, 1)  # button press to clear selection
         # el.check('Overwrite', self.overwrite, 4, 1)  # checkbox for overwite option
 
         self.file_path = ''
@@ -127,9 +127,18 @@ class MainArea(tk.Frame):
                 status_number = stats.count('Missing')
             else:
                 status = 'Complete'
-            self.db.append([patient_name, study_date, status,status_number,missing_series,patient['ID']])
+
+
+            self.zip_name = appFuncs.generateZipPath(self.database, patient_name)
+            self.unzipped_location = Path(self.database / 'Unzipped')
+            self.fol = appFuncs.generateUnZipPath(self.unzipped_location, patient_name)
+            self.nifti_path = appFuncs.generateNIFTIPath(self.database, patient_name)
+            pvp = appFuncs.processed_status(self.nifti_path)
+            row = [patient_name, study_date, status,status_number,missing_series,self.zip_name, self.nifti_path, pvp, patient['ID']]
+            self.db.append(row)
+
         self.result_tree.fileList = self.db
-        print(self.db[2])
+        # print(self.db[2])
         # Refresh results display
         self.result_tree.display()  # display the results
 
@@ -141,10 +150,9 @@ class MainArea(tk.Frame):
     # Routed here from processThreader when Process button is pressed
     def process(self):
         # self.stat.set('Processing...')
-        # queue = self.result_tree.queue()
-
-        t1=time.perf_counter()
-        process_queue = executor(self.db, self.database, self.result_tree)
+        queue = self.result_tree.queue()
+        t1 = time.perf_counter()
+        process_queue = executor(queue, self.database, self.result_tree)
         process_queue.threader()        # put the queue on multi-threaded processing
         t2 = time.perf_counter()
 
@@ -157,58 +165,80 @@ class executor:
         self.database_location = database_location
         self.db = db
         self.result_tree = result_tree
-        # self.aux_args=[]
-        # self.aux_args=['-dim',user_options[1],'-den',user_options[2]]
-        # if user_options[0]!='': self.aux_args.extend(['-tr',user_options[0]])
-        # if self.ov == 1: self.aux_args.append("-overwrite")
+
+    def execute_code1(self, que):
+        pass
 
     def execute_code(self, que):
         # args = que[0]
+        # [iid[i], patient_name, self.database_location, zipFile, niftiPath, archive]
         id = que[0]
         name = que[1]
-        fName_zip = str(Path(self.database_location / 'Zipped' / (name + '.zip')))
-        database_location = Path(que[2]/'Unzipped')
-        nifti_path = Path(que[2]/'NIFTI'/name)
-        os.mkdir(nifti_path)
-        archive = que[3]
-        # print(args)
-        self.result_tree.processing_status(id, 'Downloading Zips')
+        database_location = que[2]
+        fName_zip = que[3]
+        unzipped_location = Path(database_location/'Unzipped')
 
+        nifti_path = que[4]
+        archive = que[5]
         # save zipped files
-        # bytes_content = orthanc.archive_patient(archive)
-        # with open(fName_zip, 'wb') as file_handler:
-        #     file_handler.write(bytes_content)
-        self.result_tree.processing_status(id, 'Extracting Zips')
+        self.result_tree.processing_status(id, 'Downloading Zips')
+        bytes_content = orthanc.archive_patient(archive)
+        with open(fName_zip, 'wb') as file_handler:
+            file_handler.write(bytes_content)
+        #
+        #
         #  Extract zip
-        # zip = zipfile.ZipFile(str(fName_zip))
-        # zip.extractall(database_location)
-
-        self.result_tree.processing_status(id, 'Extracting NIFTIs')
+        self.result_tree.processing_status(id, 'Extracting Zips')
+        zip = zipfile.ZipFile(str(fName_zip))
+        zip.extractall(unzipped_location)
+        #
+        #
+        # move Folders to main directory
+        self.result_tree.processing_status(id, 'Cleaning directory')
+        fol = Path(unzipped_location).glob(name + '*')
+        folder_name = [Path(i) for i in fol]
+        s = Path(folder_name[0]).glob('*Study')
+        sl = [i for i in s]
+        source_folder = sl[0]
+        # source_folder = appFuncs.generateUnZipPath(unzipped_location, name)
+        # print(source_folder)
+        copy_tree(str(source_folder), str(folder_name[0]))
+        shutil.rmtree(source_folder)
+        #
         # Extract NIFTIS
-        fol = Path(database_location).glob(name+'*')
-        folder_name = [str(Path(i)) for i in fol]
-        args = ['dcm2niix','-o',nifti_path,folder_name[0]]
-        print(args)
+        self.result_tree.processing_status(id, 'Extracting NIFTIs')
+        if not Path(nifti_path).is_dir():
+            os.mkdir(nifti_path)
+
+        # fol = Path(unzipped_location).glob(name + '*')
+        # folder_name = [str(Path(i)) for i in fol]
+        args = ['dcm2niix','-z','y','-o',nifti_path,folder_name[0]]
         subprocess.run(args)
         self.result_tree.processing_status(id, 'Processed')
         # self.result_tree[id][3] = 1
 
     def threader(self):
-        que=self.queue_prep()
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            executor.map(self.execute_code, que)
+        que = self.queue_prep()
+        with concurrent.futures.ThreadPoolExecutor() as ex:
+            ex.map(self.execute_code, que)
 
     def queue_prep(self):
         que=[]
+        iid = [i for i in self.result_tree.tree.selection()]
+        if iid == []:
+            iid = range(0,len(self.db))
         for i in range(0,len(self.db)):
-            name = self.db[i][0]
+            patient_name = self.db[i][0]
+            zipFile = self.db[i][5]
+            niftiPath = self.db[i][6]
             # fName_zip = str(Path(self.database_location /'Zipped'/ (self.db[i][0] + '.zip')))
             # fName = str(Path(self.database_location / self.db[i][0]))
+            # row = [patient_name, study_date, status,status_number,missing_series,self.zip_name, self.nifti_path, pvp, patient['ID']]
             archive = self.db[i][-1]
-            row = [i, name, self.database_location, archive]
+            row = [iid[i], patient_name, self.database_location, zipFile, niftiPath,archive]
             que.append(row)
         return que
-
+## 8****************************************************************************************************************8
 class result_window:
 
     def __init__(self, parent,database,headers,headings):
@@ -227,12 +257,13 @@ class result_window:
             self.tree.heading(headers[i], text=headings[i])
             self.tree.column(headers[i], width=widths[i], stretch=tk.NO, anchor='center')
         self.tree.column(headers[1], width=widths[1], stretch=tk.NO, anchor='w')
-        # self.tree.bind('<Button-1>',self.left_click)
+        self.tree.bind('<Button-1>',self.left_click)
         self.tree.bind('d', self.delete_entry)
         # self.tree.bind(('<Button-3>' ), self.double_left_click)
         # self.tree.bind(('<Button-2>'), self.double_left_click)
         # self.tree.bind(('w'), self.double_left_click)
         self.last_focus = None
+        self.clickID = 1000000
 
 
     def display(self):
@@ -245,6 +276,7 @@ class result_window:
             status = row[2]
             count = row[3]
             missing_series = row[4]
+            pvp = row[-2]
             sel = self.tree.insert("", index, iid, values=(iid + 1, id, date,status, count))
             if len(missing_series)!=0:
                 m_id = 1
@@ -256,31 +288,34 @@ class result_window:
 
             # self.motion_stats(iid, motion)
 
-            # if pvp == 0:
-            #     self.processing_status(iid, 'Not Processed')
+            if pvp == 0:
+                self.processing_status(iid, 'Not Processed')
             # elif pop==0:
             #     self.processing_status(iid, 'Processed')
-            # else:
-            #     self.processing_status(iid, 'Post-Processed')
+            else:
+                self.processing_status(iid, 'Processed')
             index = iid = index + 1
-
-
 
     # generate queue for processing
     def queue(self):
         fl = self.fileList
         # id = list(range(0, len(fl)))
         index = self.tree.selection()
+        print(index)
         # if any items are selected, modify the file list to be processed
         if len(index) != 0:
             N = [int(i) for i in index]
             fl = [fl[j] for j in N]
             # id = N
         return fl
+
     # clears selection of all items in treeview
     def clear(self):
         for item in self.tree.selection(): self.tree.selection_remove(item)
-        self.viewer.clearFrame()
+
+    # clears selection of line
+    def clear_row(self, iid):
+        self.tree.selection_remove(iid)
 
     def delete(self):
         self.tree.delete(*self.tree.get_children())
@@ -290,26 +325,8 @@ class result_window:
         self.tree.set(iid, 'Status', stsMsg)
         self.parent.update_idletasks()
 
-    def set_motion_stat(self):
-        self.stat.set('Matches Found: %d   |    Absolute Motion = %.2f +/- %.2f mm   |    Relative Motion = %.2f  +/- %.2f mm',
-                      len(self.fileList), self.absolute[0], self.absolute[1], self.relative[0],
-                      self.relative[1])
-
-    def motion_stats(self, iid, motion):
-        MotionStats = 'Abs:' + str(motion[0]) + ' Rel: ' + str(motion[1])
-        self.tree.set(iid, 'Motion', MotionStats)
-
     def left_click(self, event):
-        iid = self.tree.identify_row(event.y)
-        self.clickID =iid
-        if not iid == '':
-            iid=int(iid)
-            path = self.fileList[iid][0] / 'mc'
-            name = ['trans.png', 'rot.png', 'disp.png']
-            im_list=[]
-            for i in name:
-                im_list.append(path/i)
-            self.viewer.display(im_list, mode=1)
+        self.clickID = int(self.tree.identify_row(event.y))
 
     # def double_left_click(self, event):
     #     iid = self.clickID
@@ -348,6 +365,42 @@ class result_window:
             self.delete()
             self.display()
             self.clickID = ''
+
+## 8****************************************************************************************************************8
+#   helper class for common use functions
+class appFuncs:
+    # generates output folder path
+    @staticmethod
+    def generateZipPath(database, patient_name):
+        zipFileName = str(Path(database / 'Zipped' / (patient_name + '.zip')))
+        return zipFileName
+
+
+    @staticmethod
+    def generateUnZipPath(unzipped_location, patient_name):
+        unzipFolderName = ''
+        fol = Path(unzipped_location).glob(patient_name + '*')
+        f = [i for i in fol]
+        if len(f) != 0: unzipFolderName = f[0]
+        return unzipFolderName
+
+
+
+    @staticmethod
+    def generateNIFTIPath(database, patient_name):
+        niftipath = Path(database / 'NIFTI' / patient_name)
+        return niftipath
+
+    # Identify previously processed datasets
+    @staticmethod
+    def processed_status(nifti_path):
+        if Path(nifti_path).is_dir():
+            pvp = 1
+        else:
+            pvp = 0
+        return pvp
+
+
 #-----------------------------------------------------------------------------------------------------------------------
 
 class MainApp(tk.Frame):
