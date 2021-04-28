@@ -142,14 +142,7 @@ class MainArea(tk.Frame):
     def process(self):
         # self.stat.set('Processing...')
         # queue = self.result_tree.queue()
-        # for i in range(0,len(self.db)):
-        #     fName = str(Path(self.database/(self.db[i][0] + '.zip')))
-        #     print(fName)
-        #     self.result_tree.processing_status(i,'Processing . . .')
-        #     bytes_content = orthanc.archive_patient(self.db[i][-1])
-        #     with open(fName, 'wb') as file_handler:
-        #         file_handler.write(bytes_content)
-        #     self.result_tree.processing_status(i, 'Processed')
+
         t1=time.perf_counter()
         process_queue = executor(self.db, self.database, self.result_tree)
         process_queue.threader()        # put the queue on multi-threaded processing
@@ -227,7 +220,9 @@ class result_window:
         self.fileList = []
         self.tree = ttk.Treeview(self.parent, show='headings', columns=headers)
         self.tree.grid(sticky='NSEW')
-        widths = [30,200,100,150,50,100]
+        self.tree.column("#0", width =120, minwidth= 25)
+        self.tree.heading("#0", text ="", anchor = 'w')
+        widths = [30,200,100,150,100,100]
         for i in range(0,len(headers)):
             self.tree.heading(headers[i], text=headings[i])
             self.tree.column(headers[i], width=widths[i], stretch=tk.NO, anchor='center')
