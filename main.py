@@ -126,12 +126,12 @@ class MainArea(tk.Frame):
                 status = 'Missing'
                 status_number = stats.count('Missing')
             else:
-                status = 'Complete'
+                status = ''
 
 
             self.zip_name = appFuncs.generateZipPath(self.database, patient_name)
-            self.unzipped_location = Path(self.database / 'Unzipped')
-            self.fol = appFuncs.generateUnZipPath(self.unzipped_location, patient_name)
+            # self.unzipped_location = Path(self.database / 'Unzipped')
+            # self.fol = appFuncs.generateUnZipPath(self.unzipped_location, patient_name)
             self.nifti_path = appFuncs.generateNIFTIPath(self.database, patient_name)
             pvp = appFuncs.processed_status(self.nifti_path)
             row = [patient_name, study_date, status,status_number,missing_series,self.zip_name, self.nifti_path, pvp, patient['ID']]
@@ -176,45 +176,55 @@ class executor:
         name = que[1]
         database_location = que[2]
         fName_zip = que[3]
-        unzipped_location = Path(database_location/'Unzipped')
+        unzipped_location = Path(database_location/'Structural')
 
         nifti_path = que[4]
         archive = que[5]
-        # save zipped files
-        self.result_tree.processing_status(id, 'Downloading Zips')
+        # save zipped Dicoms files
+        self.result_tree.processing_status(id, 'Downloading Dicoms')
         bytes_content = orthanc.archive_patient(archive)
         with open(fName_zip, 'wb') as file_handler:
             file_handler.write(bytes_content)
         #
         #
         #  Extract zip
-        self.result_tree.processing_status(id, 'Extracting Zips')
-        zip = zipfile.ZipFile(str(fName_zip))
-        zip.extractall(unzipped_location)
+        self.result_tree.processing_status(id, 'Extracting DICOMS')
+        dicomzip = zipfile.ZipFile(str(fName_zip))
+        dicomzip.extractall(unzipped_location)
         #
         #
         # move Folders to main directory
         self.result_tree.processing_status(id, 'Cleaning directory')
         fol = Path(unzipped_location).glob(name + '*')
-        folder_name = [Path(i) for i in fol]
-        s = Path(folder_name[0]).glob('*Study')
+        folder_names = [Path(i) for i in fol]
+        folder_name = folder_names[0]
+        s = Path(folder_name).glob('*Study')
         sl = [i for i in s]
-        source_folder = sl[0]
-        # source_folder = appFuncs.generateUnZipPath(unzipped_location, name)
-        # print(source_folder)
-        copy_tree(str(source_folder), str(folder_name[0]))
-        shutil.rmtree(source_folder)
+        source_folder_all = sl[0]
+        mpr = Path(source_folder_all).glob('*MPRAGE*/')
+        mp = [m for m in mpr]
+        source_folder = mp[0]
+        print(source_folder)
+        shutil.move(str(source_folder), str(folder_name))
+        # copy_tree(str(source_folder), str(folder_name))
+        # shutil.rmtree(source_folder)
         #
         # Extract NIFTIS
         self.result_tree.processing_status(id, 'Extracting NIFTIs')
         if not Path(nifti_path).is_dir():
             os.mkdir(nifti_path)
 
-        # fol = Path(unzipped_location).glob(name + '*')
-        # folder_name = [str(Path(i)) for i in fol]
-        args = ['dcm2niix','-z','y','-o',nifti_path,folder_name[0]]
-        subprocess.run(args)
-        self.result_tree.processing_status(id, 'Processed')
+        args = ['dcm2niix','-z','y','-o',nifti_path,folder_name]
+        print(args)
+        # subprocess.run(args)
+
+        #  Delete all folders except the structural
+        self.result_tree.processing_status(id, 'Cleaning extras')
+        shutil.rmtree(source_folder_all)
+
+
+
+        self.result_tree.processing_status(id, 'Completed')
         # self.result_tree[id][3] = 1
 
     def threader(self):
@@ -326,7 +336,9 @@ class result_window:
         self.parent.update_idletasks()
 
     def left_click(self, event):
-        self.clickID = int(self.tree.identify_row(event.y))
+        iid = int(self.tree.identify_row(event.y))
+        if not iid == '':
+            self.clickID = iid
 
     # def double_left_click(self, event):
     #     iid = self.clickID
@@ -372,7 +384,7 @@ class appFuncs:
     # generates output folder path
     @staticmethod
     def generateZipPath(database, patient_name):
-        zipFileName = str(Path(database / 'Zipped' / (patient_name + '.zip')))
+        zipFileName = str(Path(database / 'DICOMS' / (patient_name + '.zip')))
         return zipFileName
 
 
