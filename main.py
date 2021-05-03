@@ -440,3 +440,6 @@ class MainApp(tk.Frame):
 root = tk.Tk()
 PR = MainApp(root)
 root.mainloop()
+
+
+# sudo mount -t cifs -o username=manand9@EMORYUNIVAD,dir_mode=0777,file_mode=0777 //10.224.18.6/orthofb/SPARC/ /mnt/share
