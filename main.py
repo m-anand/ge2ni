@@ -79,7 +79,8 @@ class MainArea(tk.Frame):
         self.f2.rowconfigure(0, weight=1)
 
         # Individual elements
-        self.database = Path('/home/linuxbox1/Database/')
+        project = 'R01';
+        self.database = Path('/home/linuxbox1/Database/'+ project)
         # Display results and status
         headers = ["ID","Name","Date","DLS","Missing","Status"]
         headings = ["#", "Subject ID","Date", "Download Status","Missing" ,"Conversion Status"]
@@ -206,8 +207,7 @@ class executor:
         source_folder = mp[0]
         print(source_folder)
         shutil.move(str(source_folder), str(folder_name))
-        # copy_tree(str(source_folder), str(folder_name))
-        # shutil.rmtree(source_folder)
+
         #
         # Extract NIFTIS
         self.result_tree.processing_status(id, 'Extracting NIFTIs')
@@ -216,7 +216,7 @@ class executor:
 
         args = ['dcm2niix','-z','y','-o',nifti_path,folder_name]
         print(args)
-        # subprocess.run(args)
+        subprocess.run(args)
 
         #  Delete all folders except the structural
         self.result_tree.processing_status(id, 'Cleaning extras')
