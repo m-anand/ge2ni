@@ -79,7 +79,8 @@ class MainArea(tk.Frame):
         self.f2.rowconfigure(0, weight=1)
 
         # Individual elements
-        project = 'R01';
+        project = 'R01'
+        # project = 'Incidental'
         self.database = Path('/home/linuxbox1/Database/'+ project)
         # Display results and status
         headers = ["ID","Name","Date","DLS","Missing","Status"]
@@ -131,10 +132,14 @@ class MainArea(tk.Frame):
 
 
             self.zip_name = appFuncs.generateZipPath(self.database, patient_name)
+            sta = 0
+            if Path(self.zip_name).is_file(): sta = 1
+
+            # print(f'{self.zip_name} is  {sta}')
             # self.unzipped_location = Path(self.database / 'Unzipped')
             # self.fol = appFuncs.generateUnZipPath(self.unzipped_location, patient_name)
             self.nifti_path = appFuncs.generateNIFTIPath(self.database, patient_name)
-            pvp = appFuncs.processed_status(self.nifti_path)
+            pvp = appFuncs.processed_status(self.zip_name, self.nifti_path)
             row = [patient_name, study_date, status,status_number,missing_series,self.zip_name, self.nifti_path, pvp, patient['ID']]
             self.db.append(row)
 
@@ -179,20 +184,25 @@ class executor:
         fName_zip = que[3]
         unzipped_location = Path(database_location/'Structural')
 
+
         nifti_path = que[4]
-        archive = que[5]
-        # save zipped Dicoms files
-        self.result_tree.processing_status(id, 'Downloading Dicoms')
-        bytes_content = orthanc.archive_patient(archive)
-        with open(fName_zip, 'wb') as file_handler:
-            file_handler.write(bytes_content)
-        #
-        #
+        pvp = que[5]
+        archive = que[6]
+
+        if pvp < 1:
+            # save zipped Dicoms files
+            self.result_tree.processing_status(id, 'Downloading Dicoms')
+            bytes_content = orthanc.archive_patient(archive)
+            with open(fName_zip, 'wb') as file_handler:
+                file_handler.write(bytes_content)
+
         #  Extract zip
         self.result_tree.processing_status(id, 'Extracting DICOMS')
+        print(fName_zip)
         dicomzip = zipfile.ZipFile(str(fName_zip))
+        self.result_tree.processing_status(id, 'Zip read')
         dicomzip.extractall(unzipped_location)
-        #
+        self.result_tree.processing_status(id, 'zip extracted')
         #
         # move Folders to main directory
         self.result_tree.processing_status(id, 'Cleaning directory')
@@ -241,11 +251,12 @@ class executor:
             patient_name = self.db[i][0]
             zipFile = self.db[i][5]
             niftiPath = self.db[i][6]
+            pvp = self.db[i][7]
             # fName_zip = str(Path(self.database_location /'Zipped'/ (self.db[i][0] + '.zip')))
             # fName = str(Path(self.database_location / self.db[i][0]))
             # row = [patient_name, study_date, status,status_number,missing_series,self.zip_name, self.nifti_path, pvp, patient['ID']]
             archive = self.db[i][-1]
-            row = [iid[i], patient_name, self.database_location, zipFile, niftiPath,archive]
+            row = [iid[i], patient_name, self.database_location, zipFile, niftiPath, pvp, archive]
             que.append(row)
         return que
 ## 8****************************************************************************************************************8
@@ -298,12 +309,15 @@ class result_window:
 
             # self.motion_stats(iid, motion)
 
-            if pvp == 0:
-                self.processing_status(iid, 'Not Processed')
-            # elif pop==0:
+            status_msgs = ["Not Processed", "DICOMs Downloaded", "Processed"]
+            self.processing_status(iid, status_msgs[pvp])
+
+            # if pvp == 0:
+            #     self.processing_status(iid, 'Not Processed')
+            # # elif pop==0:
+            # #     self.processing_status(iid, 'Processed')
+            # else:
             #     self.processing_status(iid, 'Processed')
-            else:
-                self.processing_status(iid, 'Processed')
             index = iid = index + 1
 
     # generate queue for processing
@@ -336,7 +350,11 @@ class result_window:
         self.parent.update_idletasks()
 
     def left_click(self, event):
-        iid = int(self.tree.identify_row(event.y))
+        try:
+            iid = int(self.tree.identify_row(event.y))
+        except:
+            iid =''
+
         if not iid == '':
             self.clickID = iid
 
@@ -405,11 +423,15 @@ class appFuncs:
 
     # Identify previously processed datasets
     @staticmethod
-    def processed_status(nifti_path):
-        if Path(nifti_path).is_dir():
+    def processed_status(zip_name,nifti_path):
+        pvp = 0
+
+        if Path(zip_name).is_file():
             pvp = 1
-        else:
-            pvp = 0
+
+        if Path(nifti_path).is_dir():
+            pvp = 2
+
         return pvp
 
 
