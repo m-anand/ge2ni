@@ -58,6 +58,37 @@ class Elements:
     def label2(self, charVariable, x_, y_, algn):
         self.b = tk.Label(self.master, textvariable=charVariable)
         self.b.grid(row=y_, column=x_, sticky=algn)
+
+## ****************************************************************************************************************
+
+class config:
+    def __init__(self, project):
+        self.project = project
+        self.readSettings()
+        self.allocate()
+
+    def readSettings(self):
+        with open(self.project) as settingsFile:
+            self.settings_dict = json.load(settingsFile)
+
+    def allocate(self):
+        self.structure = self.settings_dict["structure"]
+        self.unzippedDicoms = self.settings_dict["unzippedDicoms"]
+
+
+    # def reverse_allocate(self):
+    #     self.settings_dict["icaPath"] = self.icaPath
+    #     self.settings_dict['prefeat_identifier'] = self.prefeat_identifier
+    #     self.settings_dict['output_identifier'] = self.output_identifier
+    #     self.settings_dict['user']=self.user_options
+    #
+    # def writeSettings(self):
+    #     self.reverse_allocate()
+    #     with open(Path(__file__).parent.absolute()/'settings.json', 'w') as json_file:
+    #         json.dump(self.settings_dict, json_file)
+    #
+    # def loadDefaults(self):
+    #     self.settings_dict["user"] = self.settings_dict["defaults"].copy()
 #-----------------------------------------------------------------------------------------------------------------------
 
 class MainArea(tk.Frame):
@@ -67,6 +98,7 @@ class MainArea(tk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
         self.master = master
+
 
         # Frame for all controls
         self.f1 = tk.LabelFrame(self, text='Controls', borderwidth=1, padx=10, pady=10, relief='raised')
@@ -84,8 +116,8 @@ class MainArea(tk.Frame):
         self.database = Path('/home/linuxbox1/Database/'+ project)
         # Display results and status
         headers = ["ID","Name","Date","DLS","Missing","Status"]
-        headings = ["#", "Subject ID","Date", "Download Status","Missing" ,"Conversion Status"]
-        self.result_tree = result_window(self.f2, self.database, headers,headings)
+        headings = ["#", "Subject ID","Date", "Download Status","Missing", "Conversion Status"]
+        self.result_tree = result_window(self.f2, headers, headings)
         # Controls
         el = Elements(self.f1)
         el.button("Database", self.selectPath, '', 0, 0, tk.W + tk.E, 1)  # Selection of root directory
@@ -96,12 +128,34 @@ class MainArea(tk.Frame):
         el.button("Clear", self.result_tree.clear, '', 3, 1, tk.N, 1)  # button press to clear selection
         # el.check('Overwrite', self.overwrite, 4, 1)  # checkbox for overwite option
 
+        # options = [""]
+        self.profiles = (Path(__file__).parent.absolute() / 'profiles').glob('*.json')
+        options = [Path(i).stem for i in self.profiles]
+        options.append("")
+
+        # options = ["","R01", "Incidental"]
+        # datatype of menu text
+        self.clicked = tk.StringVar()
+        # initial menu text
+        self.clicked.set(options[-1])
+        # Create Dropdown menu
+        drop = tk.OptionMenu(self.f1, self.clicked, *options)
+        drop.grid(row=0, column=3)
+
         self.file_path = ''
         self.db = []
 
     def selectPath(self):
         self.db = []
         patients_identifiers = orthanc.get_patients()
+        project = self.clicked.get()
+        profile = (Path(__file__).parent.absolute() / 'profiles'/f'{project}.json')
+        self.config = config(profile)
+        self.sub_folders = self.config.structure
+        # sub_folders = ["DICOMS", "NIFTI", "Structural"]
+        self.database = Path('/home/linuxbox1/Database/' + project)
+        if not Path(self.database).is_dir():
+            appFuncs.initialize_storage(self.database, self.sub_folders)
 
         for patient_identifier in patients_identifiers:
             patient = orthanc.get_patient_information(patient_identifier)
@@ -262,12 +316,12 @@ class executor:
 ## 8****************************************************************************************************************8
 class result_window:
 
-    def __init__(self, parent,database,headers,headings):
+    def __init__(self, parent,headers,headings):
         # Draw a treeview of a fixed type
         # self.viewer=viewer
         # self.stat=stat
         self.parent = parent
-        self.database = database
+        self.database = []
         self.fileList = []
         self.tree = ttk.Treeview(self.parent, show='headings', columns=headers)
         self.tree.grid(sticky='NSEW')
@@ -433,6 +487,12 @@ class appFuncs:
             pvp = 2
 
         return pvp
+
+    @staticmethod
+    def initialize_storage(location, sub_folders):
+        os.mkdir(location)
+        for sub_folder in sub_folders:
+            os.mkdir(Path(location)/sub_folder)
 
 
 #-----------------------------------------------------------------------------------------------------------------------

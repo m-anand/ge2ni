@@ -1,0 +1,5 @@
+{
+     "Project": "R01",
+     "structure": ["DICOMS", "NIFTI", "Structural"], 
+     "unzippedDicoms": ["MPRAGE"]
+}
