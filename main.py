@@ -151,17 +151,21 @@ class MainArea(tk.Frame):
         project = self.clicked.get()
         profile = (Path(__file__).parent.absolute() / 'profiles'/f'{project}.json')
         self.config = config(profile)
-        self.sub_folders = self.config.structure
+        # self.config.structure
+
         # sub_folders = ["DICOMS", "NIFTI", "Structural"]
         self.database = Path('/home/linuxbox1/Database/' + project)
         if not Path(self.database).is_dir():
             appFuncs.initialize_storage(self.database, self.sub_folders)
+
+
 
         for patient_identifier in patients_identifiers:
             patient = orthanc.get_patient_information(patient_identifier)
             patient_name = patient['MainDicomTags']['PatientID']
             study_identifiers = patient['Studies']
             study = orthanc.get_study_information(study_identifiers[0])
+            num_series = study['Series'].__len__()
             date = study['MainDicomTags']['StudyDate']
             date_obj = datetime.datetime.strptime(date, '%Y%m%d')
             study_date = date_obj.date()
@@ -194,7 +198,10 @@ class MainArea(tk.Frame):
             # self.fol = appFuncs.generateUnZipPath(self.unzipped_location, patient_name)
             self.nifti_path = appFuncs.generateNIFTIPath(self.database, patient_name)
             pvp = appFuncs.processed_status(self.zip_name, self.nifti_path)
-            row = [patient_name, study_date, status,status_number,missing_series,self.zip_name, self.nifti_path, pvp, patient['ID']]
+
+            # row = [patient_name, study_date, status, status_number, missing_series, self.zip_name, self.nifti_path, pvp, patient['ID']]
+            row = [patient_name, study_date, status, status_number, num_series, missing_series, self.zip_name, self.nifti_path, pvp, patient['ID']]
+
             self.db.append(row)
 
         self.result_tree.fileList = self.db
@@ -212,7 +219,7 @@ class MainArea(tk.Frame):
         # self.stat.set('Processing...')
         queue = self.result_tree.queue()
         t1 = time.perf_counter()
-        process_queue = executor(queue, self.database, self.result_tree)
+        process_queue = executor(queue, self.database, self.result_tree, self.config)
         process_queue.threader()        # put the queue on multi-threaded processing
         t2 = time.perf_counter()
 
@@ -220,11 +227,12 @@ class MainArea(tk.Frame):
         # self.stat.set(f'Processing Completed in {round((t2-t1)/60)} minutes')
 
 class executor:
-    def __init__(self,db,database_location,result_tree):
+    def __init__(self, db, database_location, result_tree, config):
         self.fl = list
         self.database_location = database_location
         self.db = db
         self.result_tree = result_tree
+        self.config = config
 
     def execute_code1(self, que):
         pass
@@ -232,63 +240,69 @@ class executor:
     def execute_code(self, que):
         # args = que[0]
         # [iid[i], patient_name, self.database_location, zipFile, niftiPath, archive]
-        id = que[0]
-        name = que[1]
+        iid = que[0]
+        subject_name = que[1]
         database_location = que[2]
         fName_zip = que[3]
-        unzipped_location = Path(database_location/'Structural')
 
 
         nifti_path = que[4]
         pvp = que[5]
-        archive = que[6]
+        structure = que[6]
+        unzippedDicoms = que[7]
+        archive = que[8]
+        unzipped_location = Path(database_location/structure[2])
 
         if pvp < 1:
             # save zipped Dicoms files
-            self.result_tree.processing_status(id, 'Downloading Dicoms')
+            self.result_tree.processing_status(iid, 'Downloading Dicoms')
             bytes_content = orthanc.archive_patient(archive)
             with open(fName_zip, 'wb') as file_handler:
                 file_handler.write(bytes_content)
 
         #  Extract zip
-        self.result_tree.processing_status(id, 'Extracting DICOMS')
-        print(fName_zip)
+        self.result_tree.processing_status(iid, 'Extracting DICOMS')
+        # print(fName_zip)
         dicomzip = zipfile.ZipFile(str(fName_zip))
-        self.result_tree.processing_status(id, 'Zip read')
+        self.result_tree.processing_status(iid, 'Zip read')
         dicomzip.extractall(unzipped_location)
-        self.result_tree.processing_status(id, 'zip extracted')
+        self.result_tree.processing_status(iid, 'zip extracted')
         #
+
         # move Folders to main directory
-        self.result_tree.processing_status(id, 'Cleaning directory')
-        fol = Path(unzipped_location).glob(name + '*')
+        self.result_tree.processing_status(iid, 'Cleaning directory')
+        fol = Path(unzipped_location).glob(subject_name + '*')
         folder_names = [Path(i) for i in fol]
         folder_name = folder_names[0]
-        s = Path(folder_name).glob('*Study')
-        sl = [i for i in s]
-        source_folder_all = sl[0]
-        mpr = Path(source_folder_all).glob('*MPRAGE*/')
-        mp = [m for m in mpr]
-        source_folder = mp[0]
-        print(source_folder)
-        shutil.move(str(source_folder), str(folder_name))
+        print(unzippedDicoms)
+        if not unzippedDicoms:
+            s = Path(folder_name).glob('*Study')
+            sl = [i for i in s]
+            source_folder_all = sl[0]
+            mpr = Path(source_folder_all).glob('*MPRAGE*/')
+            mp = [m for m in mpr]
+            source_folder = mp[0]
+            print(source_folder)
+            shutil.move(str(source_folder), str(folder_name))
 
         #
         # Extract NIFTIS
-        self.result_tree.processing_status(id, 'Extracting NIFTIs')
+        self.result_tree.processing_status(iid, 'Extracting NIFTIs')
         if not Path(nifti_path).is_dir():
             os.mkdir(nifti_path)
 
-        args = ['dcm2niix','-z','y','-o',nifti_path,folder_name]
+        args = ['dcm2niix','-z','y','-o',nifti_path, folder_name]
         print(args)
         subprocess.run(args)
 
         #  Delete all folders except the structural
-        self.result_tree.processing_status(id, 'Cleaning extras')
-        shutil.rmtree(source_folder_all)
+        self.result_tree.processing_status(iid, 'Cleaning extras')
+        if not unzippedDicoms:
+            shutil.rmtree(source_folder_all)
 
 
 
-        self.result_tree.processing_status(id, 'Completed')
+        self.result_tree.processing_status(iid, 'Completed')
         # self.result_tree[id][3] = 1
 
     def threader(self):
@@ -297,20 +311,21 @@ class executor:
             ex.map(self.execute_code, que)
 
     def queue_prep(self):
-        que=[]
+        que = []
         iid = [i for i in self.result_tree.tree.selection()]
         if iid == []:
             iid = range(0,len(self.db))
         for i in range(0,len(self.db)):
             patient_name = self.db[i][0]
-            zipFile = self.db[i][5]
-            niftiPath = self.db[i][6]
-            pvp = self.db[i][7]
+            zipFile = self.db[i][6]
+            niftiPath = self.db[i][7]
+            pvp = self.db[i][8]
+            structure = self.config.structure
+            unzippedDicoms = self.config.unzippedDicoms
             # fName_zip = str(Path(self.database_location /'Zipped'/ (self.db[i][0] + '.zip')))
             # fName = str(Path(self.database_location / self.db[i][0]))
-            # row = [patient_name, study_date, status,status_number,missing_series,self.zip_name, self.nifti_path, pvp, patient['ID']]
             archive = self.db[i][-1]
-            row = [iid[i], patient_name, self.database_location, zipFile, niftiPath, pvp, archive]
+            row = [iid[i], patient_name, self.database_location, zipFile, niftiPath, pvp, structure, unzippedDicoms, archive]
             que.append(row)
         return que
 ## 8****************************************************************************************************************8
@@ -327,11 +342,12 @@ class result_window:
         self.tree.grid(sticky='NSEW')
         self.tree.column("#0", width =120, minwidth= 25)
         self.tree.heading("#0", text ="", anchor = 'w')
-        widths = [30,200,100,150,100,100]
+        widths = [30,200,100,150,100,150]
         for i in range(0,len(headers)):
             self.tree.heading(headers[i], text=headings[i])
             self.tree.column(headers[i], width=widths[i], stretch=tk.NO, anchor='center')
         self.tree.column(headers[1], width=widths[1], stretch=tk.NO, anchor='w')
+        self.tree.column(headers[4], width=widths[4], stretch=tk.NO, anchor='e')
         self.tree.bind('<Button-1>',self.left_click)
         self.tree.bind('d', self.delete_entry)
         # self.tree.bind(('<Button-3>' ), self.double_left_click)
@@ -350,10 +366,12 @@ class result_window:
             date = row[1]
             status = row[2]
             count = row[3]
-            missing_series = row[4]
-            pvp = row[-2]
-            sel = self.tree.insert("", index, iid, values=(iid + 1, id, date,status, count))
-            if len(missing_series)!=0:
+            num_series = row[4]
+            missing_series = row[5]
+            pvp = row[8]
+            transfer_count = f'{count}    of    {num_series:02}'
+            sel = self.tree.insert("", index, iid, values=(iid + 1, id, date, status, transfer_count))
+            if len(missing_series) != 0:
                 m_id = 1
                 for mis_ser in missing_series:
                     # m_id = iid*10+m_id
@@ -364,6 +382,7 @@ class result_window:
             # self.motion_stats(iid, motion)
 
             status_msgs = ["Not Processed", "DICOMs Downloaded", "Processed"]
+            print(pvp)
             self.processing_status(iid, status_msgs[pvp])
 
             # if pvp == 0:
@@ -477,7 +496,7 @@ class appFuncs:
 
     # Identify previously processed datasets
     @staticmethod
-    def processed_status(zip_name,nifti_path):
+    def processed_status(zip_name, nifti_path):
         pvp = 0
 
         if Path(zip_name).is_file():
