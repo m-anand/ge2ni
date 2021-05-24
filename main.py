@@ -279,11 +279,14 @@ class executor:
             s = Path(folder_name).glob('*Study')
             sl = [i for i in s]
             source_folder_all = sl[0]
-            mpr = Path(source_folder_all).glob('*MPRAGE*/')
-            mp = [m for m in mpr]
-            source_folder = mp[0]
-            print(source_folder)
-            shutil.move(str(source_folder), str(folder_name))
+            try:
+                mpr = Path(source_folder_all).glob('*MPRAGE*/')
+                mp = [m for m in mpr]
+                source_folder = mp[0]
+                print(source_folder)
+                shutil.move(str(source_folder), str(folder_name))
+            except:
+                print('Folder not present.. moving on')
 
         #
         # Extract NIFTIS
