@@ -144,11 +144,15 @@ class MainArea(tk.Frame):
         self.db = []
 
     def project(self):
+        # find database location
+        settings_file = (Path(__file__).parent.absolute()/'settings.json')
+        with open(settings_file) as settingsFile:
+            self.settings = json.load(settingsFile)
+        #  Generate project specific paths
         project = self.project_selection.get()
         profile = (Path(__file__).parent.absolute() / 'profiles' / f'{project}.json')
         self.config = config(profile)
-        self.database = Path('/home/linuxbox1/Database/' + project)
-        # self.database = Path('/media/linuxbox1/DataDrive/Database/' + project)
+        self.database = Path(self.settings["database"] + project)
         if not Path(self.database).is_dir():
             appFuncs.initialize_storage(self.database, self.config.structure)
 
@@ -168,17 +172,19 @@ class MainArea(tk.Frame):
             stats = []
             series_description = []
             status = ''
+            status_number = 0
+            missing_series= []
 
 ### speed up
-            for s in study['Series']:
-                series = orthanc.get_series_information(s)
-                series_description.append(series['MainDicomTags']['SeriesDescription'])
-                stats.append(series['Status'])
-
-            ls_missing = [i for i in range(len(stats)) if stats[i] == 'Missing']
-            status_number = len(ls_missing)
-            missing_series = [series_description[k] for k in ls_missing]
-            if status_number > 0: status = 'Missing'
+            # for s in study['Series']:
+            #     series = orthanc.get_series_information(s)
+            #     series_description.append(series['MainDicomTags']['SeriesDescription'])
+            #     stats.append(series['Status'])
+            #
+            # ls_missing = [i for i in range(len(stats)) if stats[i] == 'Missing']
+            # status_number = len(ls_missing)
+            # missing_series = [series_description[k] for k in ls_missing]
+            # if status_number > 0: status = 'Missing'
             pvp = -1
             row = [patient_name, patient['ID'], study_date, status, status_number, num_series, missing_series, pvp]
 
