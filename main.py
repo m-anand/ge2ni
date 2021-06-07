@@ -18,6 +18,7 @@
 import tkinter as tk
 from tkinter import filedialog, ttk
 from pathlib import Path
+from copy import deepcopy
 from distutils.dir_util import copy_tree
 import subprocess, json, threading, time, datetime, zipfile, os, shutil
 import concurrent.futures
@@ -25,7 +26,7 @@ from pyorthanc import Orthanc
 
 orthanc = Orthanc('http://localhost:8042')
 
-name ="genii"
+name ="GEnii"
 # helper class for common gui widgets
 class Elements:
     def __init__(self, master):
@@ -111,16 +112,17 @@ class MainArea(tk.Frame):
         self.f2.rowconfigure(0, weight=1)
 
         # Individual elements
-        project = 'R01'
+        # project = 'R01'
         # project = 'Incidental'
-        self.database = Path('/home/linuxbox1/Database/'+ project)
+        # self.database = Path('/home/linuxbox1/Database/'+ project)
+
         # Display results and status
         headers = ["ID","Name","Date","DLS","Missing","Status"]
         headings = ["#", "Subject ID","Date", "Download Status","Missing", "Conversion Status"]
         self.result_tree = result_window(self.f2, headers, headings)
         # Controls
         el = Elements(self.f1)
-        el.button("Database", self.selectPath, '', 0, 0, tk.W + tk.E, 1)  # Selection of root directory
+        el.button("Database", self.dicom_database, '', 0, 0, tk.W + tk.E, 1)  # Selection of root directory
         el.button("Process", self.processThreader, '', 0, 1, tk.W + tk.E, 1)  # Process all data
         # self.dataset = el.textField("Task/Dataset", 20, 1, 0)  # Task or Dataset to be searched for
         # self.filters = el.textField("Filters", 20, 1, 1)  # keywords to filter individual datasets
@@ -132,34 +134,28 @@ class MainArea(tk.Frame):
         self.profiles = (Path(__file__).parent.absolute() / 'profiles').glob('*.json')
         options = [Path(i).stem for i in self.profiles]
         options.append("")
-
-        # options = ["","R01", "Incidental"]
-        # datatype of menu text
-        self.clicked = tk.StringVar()
+        self.project_selection = tk.StringVar()
         # initial menu text
-        self.clicked.set(options[-1])
+        self.project_selection.set(options[-1])
         # Create Dropdown menu
-        drop = tk.OptionMenu(self.f1, self.clicked, *options)
+        drop = tk.OptionMenu(self.f1, self.project_selection, *options)
         drop.grid(row=0, column=3)
-
         self.file_path = ''
         self.db = []
 
-    def selectPath(self):
+    def project(self):
+        project = self.project_selection.get()
+        profile = (Path(__file__).parent.absolute() / 'profiles' / f'{project}.json')
+        self.config = config(profile)
+        self.database = Path('/home/linuxbox1/Database/' + project)
+        # self.database = Path('/media/linuxbox1/DataDrive/Database/' + project)
+        if not Path(self.database).is_dir():
+            appFuncs.initialize_storage(self.database, self.config.structure)
+
+    def dicom_database(self):
+        t1 = time.perf_counter()
         self.db = []
         patients_identifiers = orthanc.get_patients()
-        project = self.clicked.get()
-        profile = (Path(__file__).parent.absolute() / 'profiles'/f'{project}.json')
-        self.config = config(profile)
-        # self.config.structure
-
-        # sub_folders = ["DICOMS", "NIFTI", "Structural"]
-        self.database = Path('/home/linuxbox1/Database/' + project)
-        if not Path(self.database).is_dir():
-            appFuncs.initialize_storage(self.database, self.sub_folders)
-
-
-
         for patient_identifier in patients_identifiers:
             patient = orthanc.get_patient_information(patient_identifier)
             patient_name = patient['MainDicomTags']['PatientID']
@@ -170,44 +166,50 @@ class MainArea(tk.Frame):
             date_obj = datetime.datetime.strptime(date, '%Y%m%d')
             study_date = date_obj.date()
             stats = []
-            series_description =[]
-            missing_series=[]
+            series_description = []
+            status = ''
+
+### speed up
             for s in study['Series']:
                 series = orthanc.get_series_information(s)
                 series_description.append(series['MainDicomTags']['SeriesDescription'])
                 stats.append(series['Status'])
 
-            status_number = 0
-            for i in range(0,len(stats)):
-                if stats[i] == 'Missing':
-                    missing_series.append(series_description[i])
-
-            if 'Missing' in stats:
-                status = 'Missing'
-                status_number = stats.count('Missing')
-            else:
-                status = ''
-
-
-            self.zip_name = appFuncs.generateZipPath(self.database, patient_name)
-            sta = 0
-            if Path(self.zip_name).is_file(): sta = 1
-
-            # print(f'{self.zip_name} is  {sta}')
-            # self.unzipped_location = Path(self.database / 'Unzipped')
-            # self.fol = appFuncs.generateUnZipPath(self.unzipped_location, patient_name)
-            self.nifti_path = appFuncs.generateNIFTIPath(self.database, patient_name)
-            pvp = appFuncs.processed_status(self.zip_name, self.nifti_path)
-
-            # row = [patient_name, study_date, status, status_number, missing_series, self.zip_name, self.nifti_path, pvp, patient['ID']]
-            row = [patient_name, study_date, status, status_number, num_series, missing_series, self.zip_name, self.nifti_path, pvp, patient['ID']]
+            ls_missing = [i for i in range(len(stats)) if stats[i] == 'Missing']
+            status_number = len(ls_missing)
+            missing_series = [series_description[k] for k in ls_missing]
+            if status_number > 0: status = 'Missing'
+            pvp = -1
+            row = [patient_name, patient['ID'], study_date, status, status_number, num_series, missing_series, pvp]
 
             self.db.append(row)
-
-        self.result_tree.fileList = self.db
-        # print(self.db[2])
+        self.result_tree.fileList = deepcopy(self.db)
         # Refresh results display
         self.result_tree.display()  # display the results
+        t2 = time.perf_counter()
+
+        print(f'Database Generated in {(t2 - t1)} Seconds')
+        # self.file_list_gen()
+
+
+    def file_list_gen(self):
+        tmp_db = deepcopy(self.db)
+        for row in tmp_db:
+            patient_name = row[0]
+            self.zip_name = appFuncs.generateZipPath(self.database, patient_name)
+            self.nifti_path = appFuncs.generateNIFTIPath(self.database, patient_name)
+            pvp = appFuncs.processed_status(self.zip_name, self.nifti_path)
+            row[-1] = pvp
+            row.extend([self.zip_name, self.nifti_path])
+
+
+        self.result_tree.fileList = deepcopy(tmp_db)
+        # Refresh results display
+        self.result_tree.display()  # display the results
+
+    def update_selection(self, *args):
+        self.project()
+        self.file_list_gen()
 
     def processThreader(self):
         self.update_idletasks()
@@ -240,25 +242,26 @@ class executor:
     def execute_code(self, que):
         # args = que[0]
         # [iid[i], patient_name, self.database_location, zipFile, niftiPath, archive]
-        iid = que[0]
-        subject_name = que[1]
-        database_location = que[2]
-        fName_zip = que[3]
+        iid, subject_name, archive, pvp, fName_zip, nifti_path = [que[i] for i in list(range(0,len(que)))]
+        # iid = que[0]
+        # subject_name = que[1]
+        # database_location = que[2]
+        # fName_zip = que[3]
+        # nifti_path = que[4]
+        # pvp = que[5]
+        # structure = que[6]
+        # unzippedDicoms = que[7]
+        # archive = que[8]
+        unzipped_location = Path(self.database_location/self.config.structure[2])
+        # delete zip file if it already exists
+        if pvp > 0:
+            os.remove(fName_zip)
 
-
-        nifti_path = que[4]
-        pvp = que[5]
-        structure = que[6]
-        unzippedDicoms = que[7]
-        archive = que[8]
-        unzipped_location = Path(database_location/structure[2])
-
-        if pvp < 1:
-            # save zipped Dicoms files
-            self.result_tree.processing_status(iid, 'Downloading Dicoms')
-            bytes_content = orthanc.archive_patient(archive)
-            with open(fName_zip, 'wb') as file_handler:
-                file_handler.write(bytes_content)
+        # save zipped Dicoms files
+        self.result_tree.processing_status(iid, 'Downloading Dicoms')
+        bytes_content = orthanc.archive_patient(archive)
+        with open(fName_zip, 'wb') as file_handler:
+            file_handler.write(bytes_content)
 
         #  Extract zip
         self.result_tree.processing_status(iid, 'Extracting DICOMS')
@@ -274,8 +277,8 @@ class executor:
         fol = Path(unzipped_location).glob(subject_name + '*')
         folder_names = [Path(i) for i in fol]
         folder_name = folder_names[0]
-        print(unzippedDicoms)
-        if not unzippedDicoms:
+        print(self.config.unzippedDicoms)
+        if self.config.unzippedDicoms:
             s = Path(folder_name).glob('*Study')
             sl = [i for i in s]
             source_folder_all = sl[0]
@@ -300,10 +303,8 @@ class executor:
 
         #  Delete all folders except the structural
         self.result_tree.processing_status(iid, 'Cleaning extras')
-        if not unzippedDicoms:
+        if self.config.unzippedDicoms:
             shutil.rmtree(source_folder_all)
-
-
 
         self.result_tree.processing_status(iid, 'Completed')
         # self.result_tree[id][3] = 1
@@ -317,18 +318,10 @@ class executor:
         que = []
         iid = [i for i in self.result_tree.tree.selection()]
         if iid == []:
-            iid = range(0,len(self.db))
-        for i in range(0,len(self.db)):
-            patient_name = self.db[i][0]
-            zipFile = self.db[i][6]
-            niftiPath = self.db[i][7]
-            pvp = self.db[i][8]
-            structure = self.config.structure
-            unzippedDicoms = self.config.unzippedDicoms
-            # fName_zip = str(Path(self.database_location /'Zipped'/ (self.db[i][0] + '.zip')))
-            # fName = str(Path(self.database_location / self.db[i][0]))
-            archive = self.db[i][-1]
-            row = [iid[i], patient_name, self.database_location, zipFile, niftiPath, pvp, structure, unzippedDicoms, archive]
+            iid = range(0, len(self.db))
+        for i in range(0, len(self.db)):
+            var_list = (0, 1, 7, 8, 9)
+            row = [iid[i]]+[self.db[i][j] for j in var_list] #+[structure, unzippedDicoms]
             que.append(row)
         return que
 ## 8****************************************************************************************************************8
@@ -365,13 +358,9 @@ class result_window:
         index = iid = 0
 
         for row in self.fileList:
-            id = row[0]
-            date = row[1]
-            status = row[2]
-            count = row[3]
-            num_series = row[4]
-            missing_series = row[5]
-            pvp = row[8]
+            # patient_name, patient['ID'], study_date, status, status_number, num_series, missing_series, self.zip_name, self.nifti_path, pvp
+            var_list =[0 ,2, 3, 4, 5, 6, 7]
+            id, date, status, count, num_series, missing_series, pvp = [row[j] for j in var_list]
             transfer_count = f'{count}    of    {num_series:02}'
             sel = self.tree.insert("", index, iid, values=(iid + 1, id, date, status, transfer_count))
             if len(missing_series) != 0:
@@ -380,20 +369,8 @@ class result_window:
                     # m_id = iid*10+m_id
                     self.tree.insert(iid, "end", values=('', mis_ser, '', '', ''))
                     # m_id += 1
-
-
-            # self.motion_stats(iid, motion)
-
-            status_msgs = ["Not Processed", "DICOMs Downloaded", "Processed"]
-            print(pvp)
+            status_msgs = ["Not Processed", "DICOMs Downloaded", "Processed","Select project"]
             self.processing_status(iid, status_msgs[pvp])
-
-            # if pvp == 0:
-            #     self.processing_status(iid, 'Not Processed')
-            # # elif pop==0:
-            # #     self.processing_status(iid, 'Processed')
-            # else:
-            #     self.processing_status(iid, 'Processed')
             index = iid = index + 1
 
     # generate queue for processing
@@ -501,7 +478,6 @@ class appFuncs:
     @staticmethod
     def processed_status(zip_name, nifti_path):
         pvp = 0
-
         if Path(zip_name).is_file():
             pvp = 1
 
@@ -535,7 +511,7 @@ class MainApp(tk.Frame):
         # self.menubar = Menubar(parent,self.config)
         # self.statusbar = StatusBar(parent)
         self.mainarea = MainArea(parent, borderwidth=1, relief=tk.RAISED)
-
+        self.mainarea.project_selection.trace("w", self.mainarea.update_selection)
         # configurations
         self.mainarea.grid(column=0, row=0, sticky='WENS')
         # self.statusbar.grid(column=0, row=1, sticky='WE')
