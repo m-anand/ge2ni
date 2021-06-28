@@ -110,11 +110,7 @@ class MainArea(tk.Frame):
         self.f2.grid(row=1, column=0, sticky='NSEW')
         self.f2.columnconfigure(0, weight=1)
         self.f2.rowconfigure(0, weight=1)
-
-        # Individual elements
-        # project = 'R01'
-        # project = 'Incidental'
-        # self.database = Path('/home/linuxbox1/Database/'+ project)
+        self.dicomdl = tk.IntVar()
 
         # Display results and status
         headers = ["ID","Name","Date","DLS","Missing","Status"]
@@ -129,6 +125,7 @@ class MainArea(tk.Frame):
         # el.button("Search", self.search, '', 3, 0, tk.N + tk.S, 1)  # button press to start search
         el.button("Clear", self.result_tree.clear, '', 3, 1, tk.N, 1)  # button press to clear selection
         # el.check('Overwrite', self.overwrite, 4, 1)  # checkbox for overwite option
+        el.check('Download DICOMS only', self.dicomdl, 4, 1)  # checkbox for overwite option
 
         # options = [""]
         self.profiles = (Path(__file__).parent.absolute() / 'profiles').glob('*.json')
@@ -176,15 +173,16 @@ class MainArea(tk.Frame):
             missing_series= []
 
 ### speed up
-            # for s in study['Series']:
-            #     series = orthanc.get_series_information(s)
-            #     series_description.append(series['MainDicomTags']['SeriesDescription'])
-            #     stats.append(series['Status'])
-            #
-            # ls_missing = [i for i in range(len(stats)) if stats[i] == 'Missing']
-            # status_number = len(ls_missing)
-            # missing_series = [series_description[k] for k in ls_missing]
-            # if status_number > 0: status = 'Missing'
+            for s in study['Series']:
+                series = orthanc.get_series_information(s)
+                series_description.append(series['MainDicomTags']['SeriesDescription'])
+                stats.append(series['Status'])
+
+            ls_missing = [i for i in range(len(stats)) if stats[i] == 'Missing']
+            status_number = len(ls_missing)
+            missing_series = [series_description[k] for k in ls_missing]
+            if status_number > 0: status = 'Missing'
+
             pvp = -1
             row = [patient_name, patient['ID'], study_date, status, status_number, num_series, missing_series, pvp]
 
@@ -204,7 +202,7 @@ class MainArea(tk.Frame):
             patient_name = row[0]
             self.zip_name = appFuncs.generateZipPath(self.database, patient_name)
             self.nifti_path = appFuncs.generateNIFTIPath(self.database, patient_name)
-            pvp = appFuncs.processed_status(self.zip_name, self.nifti_path)
+            pvp = appFuncs.processed_status(self.zip_name, self.nifti_path, self.dicomdl.get())
             row[-1] = pvp
             row.extend([self.zip_name, self.nifti_path])
 
@@ -227,42 +225,42 @@ class MainArea(tk.Frame):
         # self.stat.set('Processing...')
         queue = self.result_tree.queue()
         t1 = time.perf_counter()
-        process_queue = executor(queue, self.database, self.result_tree, self.config)
-        process_queue.threader()        # put the queue on multi-threaded processing
+        process_queue = executor(queue, self.database, self.result_tree, self.config, self.dicomdl.get())
+        if self.dicomdl.get() == 1:
+            process_queue.threader1()  # put the queue on multi-threaded processing
+        else:
+            process_queue.threader()        # put the queue on multi-threaded processing
+        # process_queue.threader1()        # put the queue on multi-threaded processing
         t2 = time.perf_counter()
 
         print(f'Processing Completed in {round((t2-t1)/60)} minutes')
         # self.stat.set(f'Processing Completed in {round((t2-t1)/60)} minutes')
 
 class executor:
-    def __init__(self, db, database_location, result_tree, config):
+    def __init__(self, db, database_location, result_tree, config, dicomdl):
         self.fl = list
         self.database_location = database_location
         self.db = db
         self.result_tree = result_tree
         self.config = config
+        self.dicomdl = dicomdl
 
-    def execute_code1(self, que):
-        pass
+    def execute_code1(self, queue):
+        for que in queue:
+            iid, subject_name, archive, pvp, fName_zip, nifti_path = [que[i] for i in list(range(0,len(que)))]
+            # save zipped Dicoms files
+            self.result_tree.processing_status(iid, 'Downloading Dicoms')
+            bytes_content = orthanc.archive_patient(archive)
+            with open(fName_zip, 'wb') as file_handler:
+                file_handler.write(bytes_content)
+            self.result_tree.processing_status(iid, 'Completed')
 
     def execute_code(self, que):
-        # args = que[0]
-        # [iid[i], patient_name, self.database_location, zipFile, niftiPath, archive]
         iid, subject_name, archive, pvp, fName_zip, nifti_path = [que[i] for i in list(range(0,len(que)))]
-        # iid = que[0]
-        # subject_name = que[1]
-        # database_location = que[2]
-        # fName_zip = que[3]
-        # nifti_path = que[4]
-        # pvp = que[5]
-        # structure = que[6]
-        # unzippedDicoms = que[7]
-        # archive = que[8]
         unzipped_location = Path(self.database_location/self.config.structure[2])
         # delete zip file if it already exists
-        if pvp > 0:
+        if pvp > 0 and Path(fName_zip).is_file():
             os.remove(fName_zip)
-
         # save zipped Dicoms files
         self.result_tree.processing_status(iid, 'Downloading Dicoms')
         bytes_content = orthanc.archive_patient(archive)
@@ -303,7 +301,7 @@ class executor:
         if not Path(nifti_path).is_dir():
             os.mkdir(nifti_path)
 
-        args = ['dcm2niix','-z','y','-o',nifti_path, folder_name]
+        args = ['dcm2niix', '-z','y', '-f', '%p', '-o', nifti_path, folder_name]
         print(args)
         subprocess.run(args)
 
@@ -317,8 +315,12 @@ class executor:
 
     def threader(self):
         que = self.queue_prep()
-        with concurrent.futures.ThreadPoolExecutor() as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
             ex.map(self.execute_code, que)
+
+    def threader1(self):
+        que = self.queue_prep()
+        self.execute_code1(que)
 
     def queue_prep(self):
         que = []
@@ -477,17 +479,17 @@ class appFuncs:
 
     @staticmethod
     def generateNIFTIPath(database, patient_name):
-        niftipath = Path(database / 'NIFTI' / patient_name)
+        niftipath = Path(database / 'Data' / patient_name/'NIFTI')
         return niftipath
 
     # Identify previously processed datasets
     @staticmethod
-    def processed_status(zip_name, nifti_path):
+    def processed_status(zip_name, nifti_path, dicomdl):
         pvp = 0
         if Path(zip_name).is_file():
             pvp = 1
 
-        if Path(nifti_path).is_dir():
+        if Path(nifti_path).is_dir() and not dicomdl:
             pvp = 2
 
         return pvp
