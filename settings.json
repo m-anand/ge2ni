@@ -1,4 +1,5 @@
 {
      "database": "/media/linuxbox1/DataDrive/Database/",
-     "database1": "/home/linuxbox1/Database/"
+     "database1": "/home/linuxbox1/Database/",
+     "workers" : 0
 }

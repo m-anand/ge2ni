@@ -111,6 +111,7 @@ class MainArea(tk.Frame):
         self.f2.columnconfigure(0, weight=1)
         self.f2.rowconfigure(0, weight=1)
         self.dicomdl = tk.IntVar()
+        self.overwrite = tk.IntVar()
 
         # Display results and status
         headers = ["ID","Name","Date","DLS","Missing","Status"]
@@ -124,7 +125,7 @@ class MainArea(tk.Frame):
         # self.filters = el.textField("Filters", 20, 1, 1)  # keywords to filter individual datasets
         # el.button("Search", self.search, '', 3, 0, tk.N + tk.S, 1)  # button press to start search
         el.button("Clear", self.result_tree.clear, '', 3, 1, tk.N, 1)  # button press to clear selection
-        # el.check('Overwrite', self.overwrite, 4, 1)  # checkbox for overwite option
+        el.check('Overwrite', self.overwrite, 7, 1)  # checkbox for overwite option
         el.check('Download DICOMS only', self.dicomdl, 4, 1)  # checkbox for overwite option
 
         # options = [""]
@@ -150,6 +151,7 @@ class MainArea(tk.Frame):
         profile = (Path(__file__).parent.absolute() / 'profiles' / f'{project}.json')
         self.config = config(profile)
         self.database = Path(self.settings["database"] + project)
+        self.workers = self.settings["workers"]
         if not Path(self.database).is_dir():
             appFuncs.initialize_storage(self.database, self.config.structure)
 
@@ -173,15 +175,15 @@ class MainArea(tk.Frame):
             missing_series= []
 
 ### speed up
-            for s in study['Series']:
-                series = orthanc.get_series_information(s)
-                series_description.append(series['MainDicomTags']['SeriesDescription'])
-                stats.append(series['Status'])
-
-            ls_missing = [i for i in range(len(stats)) if stats[i] == 'Missing']
-            status_number = len(ls_missing)
-            missing_series = [series_description[k] for k in ls_missing]
-            if status_number > 0: status = 'Missing'
+            # for s in study['Series']:
+            #     series = orthanc.get_series_information(s)
+            #     series_description.append(series['MainDicomTags']['SeriesDescription'])
+            #     stats.append(series['Status'])
+            #
+            # ls_missing = [i for i in range(len(stats)) if stats[i] == 'Missing']
+            # status_number = len(ls_missing)
+            # missing_series = [series_description[k] for k in ls_missing]
+            # if status_number > 0: status = 'Missing'
 
             pvp = -1
             row = [patient_name, patient['ID'], study_date, status, status_number, num_series, missing_series, pvp]
@@ -225,11 +227,11 @@ class MainArea(tk.Frame):
         # self.stat.set('Processing...')
         queue = self.result_tree.queue()
         t1 = time.perf_counter()
-        process_queue = executor(queue, self.database, self.result_tree, self.config, self.dicomdl.get())
+        process_queue = executor(queue, self.database, self.result_tree, self.config, self.overwrite.get())
         if self.dicomdl.get() == 1:
-            process_queue.threader1()  # put the queue on multi-threaded processing
+            process_queue.threader1()  # put the queue on single-threaded processing
         else:
-            process_queue.threader()        # put the queue on multi-threaded processing
+            process_queue.threader(self.workers)        # put the queue on multi-threaded processing
         # process_queue.threader1()        # put the queue on multi-threaded processing
         t2 = time.perf_counter()
 
@@ -237,13 +239,13 @@ class MainArea(tk.Frame):
         # self.stat.set(f'Processing Completed in {round((t2-t1)/60)} minutes')
 
 class executor:
-    def __init__(self, db, database_location, result_tree, config, dicomdl):
+    def __init__(self, db, database_location, result_tree, config, overwrite):
         self.fl = list
         self.database_location = database_location
         self.db = db
         self.result_tree = result_tree
         self.config = config
-        self.dicomdl = dicomdl
+        self.overwrite = overwrite
 
     def execute_code1(self, queue):
         for que in queue:
@@ -257,15 +259,18 @@ class executor:
 
     def execute_code(self, que):
         iid, subject_name, archive, pvp, fName_zip, nifti_path = [que[i] for i in list(range(0,len(que)))]
-        unzipped_location = Path(self.database_location/self.config.structure[2])
+        unzipped_location = Path(self.database_location/'Data'/subject_name/self.config.structure[2])
         # delete zip file if it already exists
-        if pvp > 0 and Path(fName_zip).is_file():
+        if pvp > 0 and Path(fName_zip).is_file() and self.overwrite == 1:
             os.remove(fName_zip)
-        # save zipped Dicoms files
-        self.result_tree.processing_status(iid, 'Downloading Dicoms')
-        bytes_content = orthanc.archive_patient(archive)
-        with open(fName_zip, 'wb') as file_handler:
-            file_handler.write(bytes_content)
+
+        if (pvp > 0 and self.overwrite == 1) or pvp == 0:
+
+            # save zipped Dicoms files
+            self.result_tree.processing_status(iid, 'Downloading Dicoms')
+            bytes_content = orthanc.archive_patient(archive)
+            with open(fName_zip, 'wb') as file_handler:
+                file_handler.write(bytes_content)
 
         #  Extract zip
         self.result_tree.processing_status(iid, 'Extracting DICOMS')
@@ -303,7 +308,7 @@ class executor:
 
         args = ['dcm2niix', '-z','y', '-f', '%p', '-o', nifti_path, folder_name]
         print(args)
-        subprocess.run(args)
+        subprocess.run(args, shell=True)
 
         #  Delete all folders except the structural
         self.result_tree.processing_status(iid, 'Cleaning extras')
@@ -313,9 +318,9 @@ class executor:
         self.result_tree.processing_status(iid, 'Completed')
         # self.result_tree[id][3] = 1
 
-    def threader(self):
+    def threader(self, workers):
         que = self.queue_prep()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
             ex.map(self.execute_code, que)
 
     def threader1(self):
@@ -486,9 +491,11 @@ class appFuncs:
     @staticmethod
     def processed_status(zip_name, nifti_path, dicomdl):
         pvp = 0
+
+        #  if DICOMS have been downloaded
         if Path(zip_name).is_file():
             pvp = 1
-
+        #  if NIFTIs are available
         if Path(nifti_path).is_dir() and not dicomdl:
             pvp = 2
 
