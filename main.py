@@ -76,20 +76,6 @@ class config:
         self.structure = self.settings_dict["structure"]
         self.unzippedDicoms = self.settings_dict["unzippedDicoms"]
 
-
-    # def reverse_allocate(self):
-    #     self.settings_dict["icaPath"] = self.icaPath
-    #     self.settings_dict['prefeat_identifier'] = self.prefeat_identifier
-    #     self.settings_dict['output_identifier'] = self.output_identifier
-    #     self.settings_dict['user']=self.user_options
-    #
-    # def writeSettings(self):
-    #     self.reverse_allocate()
-    #     with open(Path(__file__).parent.absolute()/'settings.json', 'w') as json_file:
-    #         json.dump(self.settings_dict, json_file)
-    #
-    # def loadDefaults(self):
-    #     self.settings_dict["user"] = self.settings_dict["defaults"].copy()
 #-----------------------------------------------------------------------------------------------------------------------
 
 class MainArea(tk.Frame):
@@ -127,6 +113,7 @@ class MainArea(tk.Frame):
         el.button("Clear", self.result_tree.clear, '', 3, 1, tk.N, 1)  # button press to clear selection
         el.check('Overwrite', self.overwrite, 7, 1)  # checkbox for overwite option
         el.check('Download DICOMS only', self.dicomdl, 4, 1)  # checkbox for overwite option
+        el.button("Delete", self.deleteThreader, '', 6, 0, tk.N, 1)  # button press to clear selection
 
         # options = [""]
         self.profiles = (Path(__file__).parent.absolute() / 'profiles').glob('*.json')
@@ -186,7 +173,7 @@ class MainArea(tk.Frame):
             # if status_number > 0: status = 'Missing'
 
             pvp = -1
-            row = [patient_name, patient['ID'], study_date, status, status_number, num_series, missing_series, pvp]
+            row = [patient_name, patient['ID'], study_date, status, status_number, num_series, missing_series, pvp, patient_identifier]
 
             self.db.append(row)
         self.result_tree.fileList = deepcopy(self.db)
@@ -217,6 +204,22 @@ class MainArea(tk.Frame):
         self.project()
         self.file_list_gen()
 
+
+    def deleteThreader(self):
+        self.update_idletasks()
+        x = threading.Thread(target=self.delete)
+        x.daemon = True
+        x.start()
+
+    def delete(self):
+        queue = self.result_tree.queue()
+
+        for que in queue:
+            patient_identifier = que[-1]
+            orthanc.delete_patient(patient_identifier)
+        print(f'Deletion Completed')
+
+
     def processThreader(self):
         self.update_idletasks()
         x = threading.Thread(target=self.process)
@@ -228,6 +231,7 @@ class MainArea(tk.Frame):
         queue = self.result_tree.queue()
         t1 = time.perf_counter()
         process_queue = executor(queue, self.database, self.result_tree, self.config, self.overwrite.get())
+
         if self.dicomdl.get() == 1:
             process_queue.threader1()  # put the queue on single-threaded processing
         else:
@@ -423,35 +427,6 @@ class result_window:
 
         if not iid == '':
             self.clickID = iid
-
-    # def double_left_click(self, event):
-    #     iid = self.clickID
-    #     if iid != '':
-    #         self.clickID = ''
-    #         iid = int(iid)
-    #         outpath = self.fileList[iid][1]
-    #         path = appFuncs.generateProcessedOutpath(outpath)
-    #         pvp = self.fileList[iid][3]
-    #         pop=self.fileList[iid][4]
-    #         if pvp == 1:
-    #             motion_IC_file = outpath / 'classified_motion_ICs.txt'
-    #             h = open(motion_IC_file,'r')
-    #             content =h.readlines()
-    #             for line in content:
-    #                 motion_IC = line.split(',')
-    #                 motion_IC = list(map(int,motion_IC))
-    #             im_list= []
-    #             for IC in motion_IC:
-    #                 im_list.append(outpath/'melodic.ica'/'report'/f'IC_{IC}_thresh.png')
-    #                 mode = 2
-    #
-    #         if pop == 1 and pvp == 1:
-    #             im_list_post = [path / 'rendered_thresh_zstat1.png', path / 'tsplot' / 'tsplot_zstat1.png']
-    #             im_list += im_list_post
-    #             mode = 3
-    #         if pvp == 1:
-    #             self.viewer.display(im_list, mode)
-
 
     def delete_entry(self, event):
         iid = self.clickID
